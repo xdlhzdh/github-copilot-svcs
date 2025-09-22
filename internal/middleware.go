@@ -4,6 +4,7 @@ package internal
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -78,15 +79,38 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 			r.Body = io.NopCloser(bytes.NewBuffer(requestBody))
 		}
 
+		// Attempt to extract model field (if JSON body present and small enough)
+		modelName := ""
+		if len(requestBody) > 0 {
+			var tmp struct {
+				Model string `json:"model"`
+			}
+			if err := json.Unmarshal(requestBody, &tmp); err == nil && tmp.Model != "" {
+				modelName = tmp.Model
+			}
+		}
+
 		// Log request
-		Info("HTTP Request",
-			"method", r.Method,
-			"url", r.URL.String(),
-			"remote_addr", getClientIP(r),
-			"user_agent", r.UserAgent(),
-			"content_length", r.ContentLength,
-			"has_body", len(requestBody) > 0,
-		)
+		if modelName != "" {
+			Info("HTTP Request",
+				"method", r.Method,
+				"url", r.URL.String(),
+				"model", modelName,
+				"remote_addr", getClientIP(r),
+				"user_agent", r.UserAgent(),
+				"content_length", r.ContentLength,
+				"has_body", len(requestBody) > 0,
+			)
+		} else {
+			Info("HTTP Request",
+				"method", r.Method,
+				"url", r.URL.String(),
+				"remote_addr", getClientIP(r),
+				"user_agent", r.UserAgent(),
+				"content_length", r.ContentLength,
+				"has_body", len(requestBody) > 0,
+			)
+		}
 
 		// Process request
 		next.ServeHTTP(lrw, r)

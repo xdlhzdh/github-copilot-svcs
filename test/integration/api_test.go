@@ -240,6 +240,81 @@ func TestChatCompletionsEndpoint(t *testing.T) {
 	}
 }
 
+// TestCompletionsEndpoint mirrors TestChatCompletionsEndpoint but for /v1/completions
+func TestCompletionsEndpoint(t *testing.T) {
+	tests := []struct {
+		name           string
+		method         string
+		endpoint       string
+		body           string
+		expectedStatus int
+		contentType    string
+	}{
+		{
+			name:           "completions with empty body",
+			method:         "POST",
+			endpoint:       "/v1/completions",
+			body:           "",
+			expectedStatus: http.StatusBadRequest,
+			contentType:    "application/json",
+		},
+		{
+			name:           "completions with invalid JSON",
+			method:         "POST",
+			endpoint:       "/v1/completions",
+			body:           `{"invalid": json}`,
+			expectedStatus: http.StatusBadRequest,
+			contentType:    "application/json",
+		},
+		{
+			name:           "completions with wrong method",
+			method:         "GET",
+			endpoint:       "/v1/completions",
+			body:           "",
+			expectedStatus: http.StatusMethodNotAllowed,
+			contentType:    "application/json",
+		},
+		{
+			name:           "completions with basic valid request",
+			method:         "POST",
+			endpoint:       "/v1/completions",
+			body:           `{"model":"gpt-4","prompt":"test"}`,
+			expectedStatus: http.StatusUnauthorized, // Should be 401 if auth is missing
+			contentType:    "application/json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var body io.Reader
+			if tt.body != "" {
+				body = strings.NewReader(tt.body)
+			}
+
+			req, err := http.NewRequest(tt.method, baseURL+tt.endpoint, body)
+			if err != nil {
+				t.Fatalf("Failed to create request: %v", err)
+			}
+
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+
+			client := &http.Client{Timeout: 10 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("Failed to make request: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != tt.expectedStatus {
+				respBody, _ := io.ReadAll(resp.Body)
+				t.Errorf("Expected status %d, got %d. Response: %s", tt.expectedStatus, resp.StatusCode, string(respBody))
+			}
+		})
+	}
+}
+
 func TestCORSHeaders(t *testing.T) {
 	tests := []struct {
 		name           string

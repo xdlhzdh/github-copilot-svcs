@@ -105,6 +105,19 @@ make security   # Run security analysis
 make docker-build       # Build Docker image
 make docker-run         # Run Docker container
 ```
+  ## Filtering Allowed Models
+
+  You can control which models are available by specifying `allowed_models` in your config file (`config.json`).
+
+  Example:
+  ```json
+  {
+    "allowed_models": ["gpt-4o", "claude-3.7-sonnet"]
+  }
+
+  - If set, both CLI and REST /v1/models lists are filtered and show a note.
+  - Proxy requests to /v1/chat/completions will only allow those models, rejecting others with HTTP 400.
+  - If omitted or set to null, all models are permitted (default behavior).
 
 ## Building for Different OS/Architectures
 
@@ -207,6 +220,20 @@ Content-Type: application/json
   "messages": [
     {"role": "user", "content": "Hello, world!"}
   ],
+  "max_tokens": 100
+}
+```
+
+### Completions
+This endpoint is OpenAI-compatible and proxies requests to the upstream Copilot API `/completions` endpoint.
+
+```bash
+POST http://localhost:8081/v1/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-4",
+  "prompt": "Write a hello world in Python",
   "max_tokens": 100
 }
 ```

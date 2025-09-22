@@ -1,5 +1,6 @@
 {
   "port": 8081,
+  "allowed_models": null,
   "headers": {
     "user_agent": "GitHubCopilotChat/0.29.1",
     "editor_version": "vscode/1.102.3",

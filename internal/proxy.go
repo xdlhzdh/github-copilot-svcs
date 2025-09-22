@@ -38,9 +38,9 @@ const (
 
 const (
 	// ProxyCBStateClosed indicates the circuit breaker is closed.
-	ProxyCBStateClosed   = 0
+	ProxyCBStateClosed = 0
 	// ProxyCBStateOpen indicates the circuit breaker is open.
-	ProxyCBStateOpen     = 1
+	ProxyCBStateOpen = 1
 	// ProxyCBStateHalfOpen indicates the circuit breaker is half-open.
 	ProxyCBStateHalfOpen = 2
 )
@@ -323,20 +323,44 @@ func (s *ProxyService) processProxyRequest(ctx context.Context, w http.ResponseW
 		return fmt.Errorf("bad request: empty request body")
 	}
 
-	// Strict JSON validation before authentication
-	var js json.RawMessage
-	if jsonErr := json.Unmarshal(body, &js); jsonErr != nil {
-		return fmt.Errorf("bad request: invalid JSON: %w", jsonErr)
-	}
 
-	// Ensure we have a valid token before making the request
-	if tokenErr := s.authService.EnsureValidToken(s.config); tokenErr != nil {
-		Error("Failed to ensure valid token", "error", tokenErr)
-		return NewAuthError("token validation failed", tokenErr)
-	}
+    var input struct {
+        Model string `json:"model"`
+    }
+    if jsonErr := json.Unmarshal(body, &input); jsonErr != nil {
+        return fmt.Errorf("bad request: invalid JSON: %w", jsonErr)
+    }
+
+    // AllowedModels validation
+    if len(s.config.AllowedModels) > 0 {
+        allowed := false
+        for _, m := range s.config.AllowedModels {
+            if input.Model == m {
+                allowed = true
+                break
+            }
+        }
+        if !allowed {
+            return fmt.Errorf("bad request: model '%s' is not allowed by allowed_models in config", input.Model)
+        }
+    }
+
+    // Ensure we have a valid token before making the request
+    if tokenErr := s.authService.EnsureValidToken(s.config); tokenErr != nil {
+        Error("Failed to ensure valid token", "error", tokenErr)
+        return NewAuthError("token validation failed", tokenErr)
+    }
 
 	// Create new request to GitHub Copilot
-	targetURL := copilotAPIBase + chatCompletionsPath
+	var targetURL string
+	switch r.URL.Path {
+	case "/v1/completions":
+		targetURL = copilotAPIBase + "/completions"
+	case "/v1/chat/completions":
+		targetURL = copilotAPIBase + chatCompletionsPath
+	default:
+		return fmt.Errorf("unsupported proxy path: %s", r.URL.Path)
+	}
 	Debug("Sending request to target", "url", targetURL, "body_length", len(body))
 
 	req, err := http.NewRequestWithContext(ctx, r.Method, targetURL, bytes.NewBuffer(body))
@@ -363,10 +387,10 @@ func (s *ProxyService) processProxyRequest(ctx context.Context, w http.ResponseW
 		return NewNetworkError("proxy_request", targetURL, "failed to complete request after retries", err)
 	}
 	defer func() {
-	if err := resp.Body.Close(); err != nil {
-		Warn("Error closing response body", "error", err)
-	}
-}()
+		if err := resp.Body.Close(); err != nil {
+			Warn("Error closing response body", "error", err)
+		}
+	}()
 
 	// Update circuit breaker based on response
 	if resp.StatusCode < statusCodeServerError {
