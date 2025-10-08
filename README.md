@@ -105,19 +105,21 @@ make security   # Run security analysis
 make docker-build       # Build Docker image
 make docker-run         # Run Docker container
 ```
-  ## Filtering Allowed Models
 
-  You can control which models are available by specifying `allowed_models` in your config file (`config.json`).
+## Filtering Allowed Models
 
-  Example:
-  ```json
-  {
-    "allowed_models": ["gpt-4o", "claude-3.7-sonnet"]
-  }
+You can control which models are available by specifying `allowed_models` in your config file (`config.json`).
 
-  - If set, both CLI and REST /v1/models lists are filtered and show a note.
-  - Proxy requests to /v1/chat/completions will only allow those models, rejecting others with HTTP 400.
-  - If omitted or set to null, all models are permitted (default behavior).
+Example:
+```json
+{
+  "allowed_models": ["gpt-4o", "claude-3.7-sonnet"]
+}
+```
+
+- If set, both CLI and REST /v1/models lists are filtered and show a note.
+- Proxy requests to /v1/chat/completions will only allow those models, rejecting others with HTTP 400.
+- If omitted or set to null, all models are permitted (default behavior).
 
 ## Building for Different OS/Architectures
 
@@ -165,7 +167,7 @@ make run
 docker run --rm \
   -p 8081:8081 \
   -v ~/.local/share/github-copilot-svcs:/home/appuser/.local/share/github-copilot-svcs  \
-  ghcr.io/privapps/github-copilot-svcs:0.0.2
+  ghcr.io/privapps/github-copilot-svcs:latest
 ```
 
 ## CLI Commands
@@ -391,7 +393,7 @@ The proxy automatically maps common model names to GitHub Copilot models:
 
 | Input Model | GitHub Copilot Model | Provider |
 |-------------|---------------------|----------|
-| `gpt-4o`, `gpt-4.1` | As specified | OpenAI |
+| `gpt-4o`, `gpt-4.1`, `gpt-5` | As specified | OpenAI |
 | `o3`, `o3-mini`, `o4-mini` | As specified | OpenAI |
 | `claude-3.5-sonnet`, `claude-3.7-sonnet`, `claude-3.7-sonnet-thought` | As specified | Anthropic |
 | `claude-opus-4`, `claude-sonnet-4` | As specified | Anthropic |
@@ -401,6 +403,7 @@ The proxy automatically maps common model names to GitHub Copilot models:
 - **OpenAI GPT Models**: GPT-4o, GPT-4.1, O3/O4 reasoning models
 - **Anthropic Claude Models**: Claude 3.5/3.7 Sonnet variants, Claude Opus/Sonnet 4
 - **Google Gemini Models**: Gemini 2.0/2.5 Pro and Flash models
+- There are **additional models** available for use. For more information and details about these models, please refer to your GitHub Copilot subscription page.
 
 ## Security
 
