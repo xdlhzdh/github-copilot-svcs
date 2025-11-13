@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/privapps/github-copilot-svcs/internal"
+	"github.com/xdlhzdh/github-copilot-svcs/internal"
 )
 
 var (
@@ -57,7 +57,7 @@ func TestHealthEndpoint(t *testing.T) {
 	}{
 		{
 			name:           "basic health check",
-			endpoint:       "/health",
+			endpoint:       "/v1/health",
 			expectedStatus: http.StatusOK,
 			expectedFields: []string{"status", "timestamp", "version"},
 		},
@@ -186,7 +186,7 @@ func TestChatCompletionsEndpoint(t *testing.T) {
 		{
 			name:           "chat completions with invalid JSON",
 			method:         "POST",
-			endpoint:       "/v1/chat/completions",
+			endpoint:       "/v1/chat/completions?email=test@example.com",
 			body:           `{"invalid": json}`,
 			expectedStatus: http.StatusBadRequest,
 			contentType:    "application/json",
@@ -261,7 +261,7 @@ func TestCompletionsEndpoint(t *testing.T) {
 		{
 			name:           "completions with invalid JSON",
 			method:         "POST",
-			endpoint:       "/v1/completions",
+			endpoint:       "/v1/completions?email=test@example.com",
 			body:           `{"invalid": json}`,
 			expectedStatus: http.StatusBadRequest,
 			contentType:    "application/json",
@@ -334,7 +334,7 @@ func TestCORSHeaders(t *testing.T) {
 		},
 		{
 			name:           "CORS actual request",
-			endpoint:       "/health",
+			endpoint:       "/v1/health",
 			origin:         "http://localhost:3000",
 			method:         "GET",
 			expectedStatus: http.StatusOK,
@@ -421,7 +421,7 @@ func TestErrorConditions(t *testing.T) {
 }
 
 func TestSecurityHeaders(t *testing.T) {
-	resp, err := http.Get(baseURL + "/health")
+	resp, err := http.Get(baseURL + "/v1/health")
 	if err != nil {
 		t.Fatalf("Failed to make request: %v", err)
 	}
@@ -456,7 +456,7 @@ func TestServerShutdown(t *testing.T) {
 	}
 
 	// Make a request to ensure server is working
-	resp, err := http.Get(serverURL + "/health")
+	resp, err := http.Get(serverURL + "/v1/health")
 	if err != nil {
 		shutdownFunc()
 		t.Fatalf("Failed to make request: %v", err)
@@ -472,7 +472,7 @@ func TestServerShutdown(t *testing.T) {
 
 	// Verify server is no longer responding
 	time.Sleep(200 * time.Millisecond) // Give time for shutdown
-	resp2, err := http.Get(serverURL + "/health")
+	resp2, err := http.Get(serverURL + "/v1/health")
 	if resp2 != nil {
 		defer resp2.Body.Close()
 	}
@@ -550,7 +550,7 @@ func waitForServer(baseURL string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(baseURL + "/health")
+		resp, err := client.Get(baseURL + "/v1/health")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {

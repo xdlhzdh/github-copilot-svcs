@@ -10,14 +10,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	copilotAPIBase      = "https://api.githubcopilot.com"
-	chatCompletionsPath = "/chat/completions"
+	copilotAPIBase = "https://api.githubcopilot.com"
 
 	// Retry configuration for chat completions
 	maxChatRetries     = 3
@@ -323,33 +323,40 @@ func (s *ProxyService) processProxyRequest(ctx context.Context, w http.ResponseW
 		return fmt.Errorf("bad request: empty request body")
 	}
 
+	// Get email from URL query parameter
+	email := r.URL.Query().Get("email")
+	if email == "" {
+		return fmt.Errorf("authentication error: missing email in URL parameter")
+	}
+	Info("Extracted email from URL parameter", "email", email, "raw_query", r.URL.RawQuery)
 
-    var input struct {
-        Model string `json:"model"`
-    }
-    if jsonErr := json.Unmarshal(body, &input); jsonErr != nil {
-        return fmt.Errorf("bad request: invalid JSON: %w", jsonErr)
-    }
+	var input struct {
+		Model string `json:"model"`
+	}
 
-    // AllowedModels validation
-    if len(s.config.AllowedModels) > 0 {
-        allowed := false
-        for _, m := range s.config.AllowedModels {
-            if input.Model == m {
-                allowed = true
-                break
-            }
-        }
-        if !allowed {
-            return fmt.Errorf("bad request: model '%s' is not allowed by allowed_models in config", input.Model)
-        }
-    }
+	if jsonErr := json.Unmarshal(body, &input); jsonErr != nil {
+		return fmt.Errorf("bad request: invalid JSON: %w", jsonErr)
+	}
 
-    // Ensure we have a valid token before making the request
-    if tokenErr := s.authService.EnsureValidToken(s.config); tokenErr != nil {
-        Error("Failed to ensure valid token", "error", tokenErr)
-        return NewAuthError("token validation failed", tokenErr)
-    }
+	// AllowedModels validation
+	if len(s.config.AllowedModels) > 0 {
+		allowed := slices.Contains(s.config.AllowedModels, input.Model)
+		if !allowed {
+			return fmt.Errorf("bad request: model '%s' is not allowed by allowed_models in config", input.Model)
+		}
+	}
+
+	// Ensure we have a valid token before making the request
+	cfg, tokenErr := s.authService.EnsureValidToken(email, s.config)
+	if tokenErr != nil {
+		Error("Failed to ensure valid token", "error", tokenErr)
+		return NewAuthError("token validation failed", tokenErr)
+	}
+
+	Debug("Using config for request",
+		"user_agent", cfg.Headers.UserAgent,
+		"editor_version", cfg.Headers.EditorVersion,
+		"copilot_token_prefix", cfg.CopilotToken[:10]+"...")
 
 	// Create new request to GitHub Copilot
 	var targetURL string
@@ -357,7 +364,7 @@ func (s *ProxyService) processProxyRequest(ctx context.Context, w http.ResponseW
 	case "/v1/completions":
 		targetURL = copilotAPIBase + "/completions"
 	case "/v1/chat/completions":
-		targetURL = copilotAPIBase + chatCompletionsPath
+		targetURL = copilotAPIBase + "/chat/completions"
 	default:
 		return fmt.Errorf("unsupported proxy path: %s", r.URL.Path)
 	}
@@ -369,16 +376,16 @@ func (s *ProxyService) processProxyRequest(ctx context.Context, w http.ResponseW
 		return NewProxyError("create_request", "failed to create proxy request", err)
 	}
 
-	// Set headers
-	req.Header.Set("Authorization", "Bearer "+s.config.CopilotToken)
+	// Set headers (use cfg which has merged config from both service and database)
+	req.Header.Set("Authorization", "Bearer "+cfg.CopilotToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", s.config.Headers.UserAgent)
-	req.Header.Set("Editor-Version", s.config.Headers.EditorVersion)
-	req.Header.Set("Editor-Plugin-Version", s.config.Headers.EditorPluginVersion)
-	req.Header.Set("Copilot-Integration-Id", s.config.Headers.CopilotIntegrationID)
-	req.Header.Set("Openai-Intent", s.config.Headers.OpenaiIntent)
-	req.Header.Set("X-Initiator", s.config.Headers.XInitiator)
+	req.Header.Set("User-Agent", cfg.Headers.UserAgent)
+	req.Header.Set("Editor-Version", cfg.Headers.EditorVersion)
+	req.Header.Set("Editor-Plugin-Version", cfg.Headers.EditorPluginVersion)
+	req.Header.Set("Copilot-Integration-Id", cfg.Headers.CopilotIntegrationID)
+	req.Header.Set("Openai-Intent", cfg.Headers.OpenaiIntent)
+	req.Header.Set("X-Initiator", cfg.Headers.XInitiator)
 
 	resp, err := s.makeRequestWithRetry(req, body)
 	if err != nil {
@@ -399,6 +406,19 @@ func (s *ProxyService) processProxyRequest(ctx context.Context, w http.ResponseW
 		s.circuitBreaker.onFailure()
 	}
 
+	// Log error responses with body for debugging
+	if resp.StatusCode >= 400 {
+		// Read a small portion of the response body for logging
+		peekBody := make([]byte, 500)
+		n, _ := resp.Body.Read(peekBody)
+		resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(peekBody[:n]), resp.Body))
+		Error("Received error response from upstream",
+			"status", resp.StatusCode,
+			"target_url", targetURL,
+			"response_body", string(peekBody[:n]),
+			"content_type", resp.Header.Get("Content-Type"))
+	}
+
 	Debug("Received response", "status", resp.StatusCode, "content_type", resp.Header.Get("Content-Type"))
 
 	// Copy response headers
@@ -408,12 +428,12 @@ func (s *ProxyService) processProxyRequest(ctx context.Context, w http.ResponseW
 		}
 	}
 
-	// Add configurable CORS headers
-	if len(s.config.CORS.AllowedOrigins) > 0 {
-		w.Header().Set("Access-Control-Allow-Origin", strings.Join(s.config.CORS.AllowedOrigins, ", "))
+	// Add configurable CORS headers (use cfg which has merged config)
+	if len(cfg.CORS.AllowedOrigins) > 0 {
+		w.Header().Set("Access-Control-Allow-Origin", strings.Join(cfg.CORS.AllowedOrigins, ", "))
 	}
-	if len(s.config.CORS.AllowedHeaders) > 0 {
-		w.Header().Set("Access-Control-Allow-Headers", strings.Join(s.config.CORS.AllowedHeaders, ", "))
+	if len(cfg.CORS.AllowedHeaders) > 0 {
+		w.Header().Set("Access-Control-Allow-Headers", strings.Join(cfg.CORS.AllowedHeaders, ", "))
 	}
 
 	// Copy status code

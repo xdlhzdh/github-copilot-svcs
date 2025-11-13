@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"github.com/privapps/github-copilot-svcs/internal"
+	"github.com/xdlhzdh/github-copilot-svcs/internal"
 )
 
 // version will be set by the build process

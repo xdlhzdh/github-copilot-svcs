@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/privapps/github-copilot-svcs/pkg/transform"
+	"github.com/xdlhzdh/github-copilot-svcs/pkg/transform"
 )
 
 var (
@@ -36,10 +36,10 @@ func FetchFromModelsDev(httpClient *http.Client) (*transform.ModelList, error) {
 		return nil, err
 	}
 	defer func() {
-	if err := resp.Body.Close(); err != nil {
-		Warn("Error closing response body", "error", err)
-	}
-}()
+		if err := resp.Body.Close(); err != nil {
+			Warn("Error closing response body", "error", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, NewNetworkError("fetch_models", "https://models.dev/api.json", fmt.Sprintf("API returned HTTP %d", resp.StatusCode), nil)
@@ -184,39 +184,39 @@ func (s *ModelsService) Handler() http.HandlerFunc {
 			return modelList
 		})
 
-        modelList := result.(*transform.ModelList)
-        // Filter if allowed_models is set in config
-        cfg, cfgErr := LoadConfig(true)
-        filtered := modelList.Data
-        filteredMsg := ""
-        if cfgErr == nil && cfg.AllowedModels != nil && len(cfg.AllowedModels) > 0 {
-            allowedSet := make(map[string]struct{}, len(cfg.AllowedModels))
-            for _, name := range cfg.AllowedModels {
-                allowedSet[name] = struct{}{}
-            }
-            var modelsFiltered []transform.Model
-            for _, m := range filtered {
-                if _, ok := allowedSet[m.ID]; ok {
-                    modelsFiltered = append(modelsFiltered, m)
-                }
-            }
-            filtered = modelsFiltered
-            filteredMsg = "(filtered by allowed_models from config)"
-        }
-        resp := struct {
-            Object string             `json:"object"`
-            Data   []transform.Model  `json:"data"`
-            Filtered string           `json:"note,omitempty"`
-        }{
-            Object: "list",
-            Data: filtered,
-            Filtered: filteredMsg,
-        }
-        Debug("Returning models", "count", len(filtered))
-        w.Header().Set("Content-Type", "application/json")
-        if err := json.NewEncoder(w).Encode(resp); err != nil {
-            Error("Error encoding models response", "error", err)
-            http.Error(w, "Internal server error", http.StatusInternalServerError)
-        }
+		modelList := result.(*transform.ModelList)
+		// Filter if allowed_models is set in config
+		cfg, cfgErr := LoadConfig(true)
+		filtered := modelList.Data
+		filteredMsg := ""
+		if cfgErr == nil && cfg.AllowedModels != nil && len(cfg.AllowedModels) > 0 {
+			allowedSet := make(map[string]struct{}, len(cfg.AllowedModels))
+			for _, name := range cfg.AllowedModels {
+				allowedSet[name] = struct{}{}
+			}
+			var modelsFiltered []transform.Model
+			for _, m := range filtered {
+				if _, ok := allowedSet[m.ID]; ok {
+					modelsFiltered = append(modelsFiltered, m)
+				}
+			}
+			filtered = modelsFiltered
+			filteredMsg = "(filtered by allowed_models from config)"
+		}
+		resp := struct {
+			Object   string            `json:"object"`
+			Data     []transform.Model `json:"data"`
+			Filtered string            `json:"note,omitempty"`
+		}{
+			Object:   "list",
+			Data:     filtered,
+			Filtered: filteredMsg,
+		}
+		Info("Returning models", "count", len(filtered))
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			Error("Error encoding models response", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
 	}
 }

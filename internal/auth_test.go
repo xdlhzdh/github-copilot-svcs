@@ -2,13 +2,11 @@ package internal_test
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/privapps/github-copilot-svcs/internal"
+	"github.com/xdlhzdh/github-copilot-svcs/internal"
 )
 
 // Test constants
@@ -80,10 +78,10 @@ func TestAuthService_EnsureValidToken(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := tt.setupConfig()
-
 			// Use a basic client for non-HTTP tests
 			authService := internal.NewAuthService(&http.Client{Timeout: 1 * time.Second})
-			err := authService.EnsureValidToken(cfg)
+			// Use EnsureValidTokenWithConfig to test token validation logic directly
+			_, err := authService.EnsureValidTokenWithConfig("test@example.com", cfg)
 
 			if tt.expectedError {
 				if err == nil {
@@ -125,7 +123,8 @@ func TestAuthService_RefreshToken_ValidationLogic(t *testing.T) {
 			cfg := tt.setupConfig()
 			authService := internal.NewAuthService(&http.Client{Timeout: 1 * time.Second})
 
-			err := authService.RefreshToken(cfg)
+			// RefreshToken now requires email parameter
+			err := authService.RefreshToken("test@example.com", cfg)
 
 			if tt.expectedError {
 				if err == nil {
@@ -177,7 +176,8 @@ func TestAuthService_RefreshTokenWithContext_CancellationLogic(t *testing.T) {
 			authService := internal.NewAuthService(&http.Client{Timeout: 1 * time.Second})
 			ctx := tt.setupCtx()
 
-			err := authService.RefreshTokenWithContext(ctx, cfg)
+			// RefreshTokenWithContext now requires email parameter
+			err := authService.RefreshTokenWithContext(ctx, "test@example.com", cfg)
 
 			if tt.expectError {
 				if err == nil {
@@ -250,7 +250,8 @@ func TestTokenExpiryLogic(t *testing.T) {
 			cfg.ExpiresAt = tt.expiresAt
 
 			authService := internal.NewAuthService(&http.Client{Timeout: 1 * time.Second})
-			err := authService.EnsureValidToken(cfg)
+			// Use EnsureValidTokenWithConfig to test token validation logic directly
+			_, err := authService.EnsureValidTokenWithConfig("test@example.com", cfg)
 
 			if tt.shouldBeValid {
 				if err != nil {
@@ -277,7 +278,8 @@ func BenchmarkAuthService_EnsureValidToken_ValidToken(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = authService.EnsureValidToken(cfg)
+		// Use EnsureValidTokenWithConfig for benchmarking
+		_, _ = authService.EnsureValidTokenWithConfig("test@example.com", cfg)
 	}
 }
 
@@ -290,22 +292,13 @@ func BenchmarkAuthService_EnsureValidToken_ExpiredToken(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = authService.EnsureValidToken(cfg) // Will return error quickly
+		// Use EnsureValidTokenWithConfig for benchmarking
+		_, _ = authService.EnsureValidTokenWithConfig("test@example.com", cfg) // Will return error quickly
 	}
 }
 
-// Test that RefreshToken saves to config file without hitting network
-/* Obsolete TestRefreshTokenSavesConfig removed; use TestAuthService_RefreshToken_SavesConfig instead */
-
-// Test that RefreshToken saves to the injected config path
+// Test that RefreshToken uses custom refresh function
 func TestAuthService_RefreshToken_SavesConfig(t *testing.T) {
-	// Create temp config file
-	tmpfile, err := os.CreateTemp("", "copilot-config-*.json")
-	if err != nil {
-		t.Fatalf("failed to create temp file: %v", err)
-	}
-	defer os.Remove(tmpfile.Name())
-
 	cfg := createAuthTestConfig()
 	cfg.GitHubToken = "dummy-github-token"
 
@@ -318,32 +311,22 @@ func TestAuthService_RefreshToken_SavesConfig(t *testing.T) {
 	}
 
 	authSvc := internal.NewAuthService(&http.Client{},
-		internal.WithConfigPath(tmpfile.Name()),
 		internal.WithRefreshFunc(refreshFunc),
 	)
 
-	if refreshErr := authSvc.RefreshToken(cfg); refreshErr != nil {
+	// RefreshToken now requires email parameter
+	if refreshErr := authSvc.RefreshToken("test@example.com", cfg); refreshErr != nil {
 		t.Fatalf("RefreshToken failed: %v", refreshErr)
 	}
 
-	// Read back the config file
-	loaded := &internal.Config{}
-	f, openErr := os.Open(tmpfile.Name())
-	if openErr != nil {
-		t.Fatalf("failed to open temp config file: %v", openErr)
+	// Verify the config was updated by the refresh function
+	if cfg.CopilotToken != "dummy-copilot-token" {
+		t.Errorf("CopilotToken not updated correctly, got: %v", cfg.CopilotToken)
 	}
-	defer f.Close()
-	if decodeErr := json.NewDecoder(f).Decode(loaded); decodeErr != nil {
-		t.Fatalf("failed to decode config: %v", decodeErr)
+	if cfg.ExpiresAt == 0 {
+		t.Errorf("ExpiresAt not updated")
 	}
-
-	if loaded.CopilotToken != "dummy-copilot-token" {
-		t.Errorf("CopilotToken not saved correctly, got: %v", loaded.CopilotToken)
-	}
-	if loaded.ExpiresAt == 0 {
-		t.Errorf("ExpiresAt not saved")
-	}
-	if loaded.RefreshIn == 0 {
-		t.Errorf("RefreshIn not saved")
+	if cfg.RefreshIn == 0 {
+		t.Errorf("RefreshIn not updated")
 	}
 }

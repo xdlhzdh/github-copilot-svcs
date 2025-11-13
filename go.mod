@@ -1,5 +1,3 @@
-module github.com/privapps/github-copilot-svcs
+module github.com/xdlhzdh/github-copilot-svcs
 
-go 1.23.0
-
-toolchain go1.23.5
+go 1.25.0

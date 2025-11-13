@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/privapps/github-copilot-svcs/internal"
+	"github.com/xdlhzdh/github-copilot-svcs/internal"
 )
 
 // MockConfig creates a test configuration
@@ -57,8 +57,8 @@ func SetupTestDir(t *testing.T) string {
 
 	t.Cleanup(func() {
 		if err := os.RemoveAll(dir); err != nil {
-	panic(err)
-}
+			panic(err)
+		}
 	})
 
 	return dir

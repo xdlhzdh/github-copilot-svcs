@@ -1,13 +1,15 @@
 package internal
 
 import (
-"encoding/json"
-"errors"
-"flag"
-"fmt"
-"os"
-"time"
-"github.com/privapps/github-copilot-svcs/pkg/transform"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"regexp"
+	"time"
+
+	"github.com/xdlhzdh/github-copilot-svcs/pkg/transform"
 )
 
 // Command constants to avoid goconst errors
@@ -26,6 +28,14 @@ const (
 	refreshPercentThreshold = 5 // 20% = 1/5
 )
 
+// emailRegex is a simple regex pattern for validating email addresses
+var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
+
+// isValidEmail checks if the provided string is a valid email address
+func isValidEmail(email string) bool {
+	return emailRegex.MatchString(email)
+}
+
 // PrintUsage prints the command usage information
 func PrintUsage() {
 	fmt.Printf(`GitHub Copilot SVCS Proxy
@@ -37,18 +47,19 @@ Usage:
 
 Commands:
   start    Start the proxy server (default)
-  auth     Authenticate with GitHub Copilot using device flow
+  auth     Authenticate with GitHub Copilot using device flow (requires email)
   status   Show detailed authentication and token status
   config   Display current configuration details
   models   List all available AI models
-  refresh  Manually force token refresh
+  refresh  Manually force token refresh (requires email)
   help     Show this help message
   version  Show version information
 
 Examples:
-  %s auth                    # Authenticate with GitHub
-  %s run --port 8080         # Run server on port 8080
-  %s status --json           # Show status in JSON format
+  %s auth user@example.com      # Authenticate with GitHub using email
+  %s run --port 8080            # Run server on port 8080
+  %s status --json              # Show status in JSON format
+  %s refresh user@example.com   # Force refresh token for specific user
 
 Environment Variables:
   COPILOT_PORT      Server port (default: 8081)
@@ -57,7 +68,7 @@ Environment Variables:
   LOG_LEVEL         Log level (debug, info, warn, error)
 
 Options:
-`, os.Args[0], os.Args[0], os.Args[0], os.Args[0])
+`, os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0])
 	flag.PrintDefaults()
 }
 
@@ -66,10 +77,17 @@ func RunCommand(command string, args []string, version string) error {
 	// Check for flags
 	jsonOutput := len(args) >= 1 && args[0] == "--json"
 
-
 	switch command {
 	case cmdAuth:
-		return handleAuth()
+		// Validate that exactly one argument is provided and it's a valid email
+		if len(args) != 1 {
+			return fmt.Errorf("auth command requires exactly one argument (email address), got %d arguments", len(args))
+		}
+		email := args[0]
+		if !isValidEmail(email) {
+			return fmt.Errorf("invalid email format: %s", email)
+		}
+		return handleAuth(email)
 	case cmdRun, cmdStart:
 		return handleRun()
 	case cmdModels:
@@ -79,7 +97,15 @@ func RunCommand(command string, args []string, version string) error {
 	case cmdStatus:
 		return handleStatusWithFormat(jsonOutput)
 	case cmdRefresh:
-		return handleRefresh()
+		// Validate that exactly one argument is provided and it's a valid email
+		if len(args) != 1 {
+			return fmt.Errorf("refresh command requires exactly one argument (email address), got %d arguments", len(args))
+		}
+		email := args[0]
+		if !isValidEmail(email) {
+			return fmt.Errorf("invalid email format: %s", email)
+		}
+		return handleRefresh(email)
 	case "version":
 		fmt.Printf("github-copilot-svcs version %s\n", version)
 		return nil
@@ -93,7 +119,7 @@ func RunCommand(command string, args []string, version string) error {
 	}
 }
 
-func handleAuth() error {
+func handleAuth(email string) error {
 	cfg, err := LoadConfig(true)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %v", err)
@@ -104,7 +130,8 @@ func handleAuth() error {
 	authService := NewAuthService(httpClient)
 
 	fmt.Println("Starting GitHub Copilot authentication...")
-	if err := authService.Authenticate(cfg); err != nil {
+	// Use the provided email for authentication
+	if err := authService.Authenticate(email, cfg); err != nil {
 		return fmt.Errorf("authentication failed: %v", err)
 	}
 
@@ -113,14 +140,14 @@ func handleAuth() error {
 }
 
 func handleStatusWithFormat(jsonOutput bool) error {
-       cfg, err := LoadConfig()
-       if err != nil {
-               if errors.Is(err, ErrMissingTokens) {
-                       fmt.Println("Not authenticated. Run 'auth' to authenticate.")
-                       return nil
-               }
-               return fmt.Errorf("failed to load config: %v", err)
-       }
+	cfg, err := LoadConfig(true)
+	if err != nil {
+		if errors.Is(err, ErrMissingTokens) {
+			fmt.Println("Not authenticated. Run 'auth <email>' to authenticate.")
+			return nil
+		}
+		return fmt.Errorf("failed to load config: %v", err)
+	}
 
 	if jsonOutput {
 		return printStatusJSON(cfg)
@@ -214,14 +241,14 @@ func printStatusText(cfg *Config) error {
 }
 
 func handleConfig() error {
-       cfg, err := LoadConfig()
-       if err != nil {
-               if errors.Is(err, ErrMissingTokens) {
-                       fmt.Println("Not authenticated. Run 'auth' to authenticate.")
-                       return nil
-               }
-               return fmt.Errorf("failed to load config: %v", err)
-       }
+	cfg, err := LoadConfig(true)
+	if err != nil {
+		if errors.Is(err, ErrMissingTokens) {
+			fmt.Println("Not authenticated. Run 'auth <email>' to authenticate.")
+			return nil
+		}
+		return fmt.Errorf("failed to load config: %v", err)
+	}
 
 	path, _ := GetConfigPath()
 	fmt.Printf("Configuration file: %s\n", path)
@@ -243,35 +270,30 @@ func handleConfig() error {
 	return nil
 }
 
-
 func getCurrentTime() int64 {
 	return time.Now().Unix()
 }
 
 func handleRun() error {
-       cfg, err := LoadConfig()
-       if err != nil {
-               if errors.Is(err, ErrMissingTokens) {
-                       if authErr := handleAuth(); authErr != nil {
-                               return fmt.Errorf("authentication failed: %v", authErr)
-                       }
-                       cfg, err = LoadConfig()
-                       if err != nil {
-                               return fmt.Errorf("failed to load config after authentication: %v", err)
-                       }
-               } else {
-                       return fmt.Errorf("failed to load config: %v", err)
-               }
-       }
-
-	// Create HTTP client and auth service
-	httpClient := CreateHTTPClient(cfg)
-	authService := NewAuthService(httpClient)
-
-	// Ensure we're authenticated
-	if err := authService.EnsureValidToken(cfg); err != nil {
-		return fmt.Errorf("authentication failed: %v", err)
+	cfg, err := LoadConfig(true)
+	if err != nil {
+		if errors.Is(err, ErrMissingTokens) {
+			fmt.Println("Not authenticated. Run 'auth <email>' to authenticate.")
+			return fmt.Errorf("authentication required: %v", err)
+		} else {
+			return fmt.Errorf("failed to load config: %v", err)
+		}
 	}
+
+	// Create HTTP client and start server
+	httpClient := CreateHTTPClient(cfg)
+
+	// 原有逻辑：在启动前确保有效的 token 存在
+	// 现在的逻辑：不再需要在启动前确保有效的 token 存在，服务器会在运行时根据请求中的 email 自动刷新 token
+	// authService := NewAuthService(httpClient)
+	// if err := authService.EnsureValidToken(email); err != nil {
+	//     return fmt.Errorf("authentication failed: %v", err)
+	// }
 
 	// Create and start server
 	srv := NewServer(cfg, httpClient)
@@ -279,23 +301,25 @@ func handleRun() error {
 }
 
 func handleModels() error {
-       cfg, err := LoadConfig()
-       if err != nil {
-               if errors.Is(err, ErrMissingTokens) {
-                       fmt.Println("Not authenticated. Run 'auth' to authenticate.")
-                       return nil
-               }
-               return fmt.Errorf("failed to load config: %v", err)
-       }
+	cfg, err := LoadConfig(true)
+	if err != nil {
+		if errors.Is(err, ErrMissingTokens) {
+			fmt.Println("Not authenticated. Run 'auth <email>' to authenticate.")
+			return nil
+		}
+		return fmt.Errorf("failed to load config: %v", err)
+	}
 
 	// Create HTTP client and auth service
 	httpClient := CreateHTTPClient(cfg)
-	authService := NewAuthService(httpClient)
 
-	// Ensure we're authenticated
-	if authErr := authService.EnsureValidToken(cfg); authErr != nil {
-		return fmt.Errorf("authentication failed: %v", authErr)
-	}
+	// 原有逻辑：在获取模型列表前确保有效的 token 存在
+	// 现在的逻辑：不再需要在启动前确保有效的 token 存在，但由于这是一个独立的命令操作，
+	// 暂时保留原有逻辑（需要后续优化以支持 email 参数）
+	// authService := NewAuthService(httpClient)
+	// if authErr := authService.EnsureValidToken(email); authErr != nil {
+	//     return fmt.Errorf("authentication failed: %v", authErr)
+	// }
 
 	// Fetch models
 	modelList, err := FetchFromModelsDev(httpClient)
@@ -309,55 +333,51 @@ func handleModels() error {
 		return nil
 	}
 
-    filtered := modelList.Data
-    var unknown []string
-    filteredMsg := ""
-    if len(cfg.AllowedModels) > 0 {
-        allowedSet := make(map[string]struct{}, len(cfg.AllowedModels))
-        for _, name := range cfg.AllowedModels {
-            allowedSet[name] = struct{}{}
-        }
-        var tmp []transform.Model
-        foundSet := make(map[string]struct{})
-        for _, model := range filtered {
-            if _, ok := allowedSet[model.ID]; ok {
-                tmp = append(tmp, model)
-                foundSet[model.ID] = struct{}{}
-            }
-        }
-        for k := range allowedSet {
-            if _, ok := foundSet[k]; !ok {
-                unknown = append(unknown, k)
-            }
-        }
-        filtered = tmp
-        filteredMsg = "NOTE: The model list is filtered by allowed_models in config."
-        if len(unknown) > 0 {
-            fmt.Printf("WARNING: The following allowed_models were not found and are ignored: %v\n", unknown)
-        }
-    }
-    fmt.Printf("Available models (%d shown):\n", len(filtered))
-    for _, model := range filtered {
-        fmt.Printf("  - %s (%s)\n", model.ID, model.OwnedBy)
-    }
-    if filteredMsg != "" {
-        fmt.Println(filteredMsg)
-    }
-    return nil
-} 
+	filtered := modelList.Data
+	var unknown []string
+	filteredMsg := ""
+	if len(cfg.AllowedModels) > 0 {
+		allowedSet := make(map[string]struct{}, len(cfg.AllowedModels))
+		for _, name := range cfg.AllowedModels {
+			allowedSet[name] = struct{}{}
+		}
+		var tmp []transform.Model
+		foundSet := make(map[string]struct{})
+		for _, model := range filtered {
+			if _, ok := allowedSet[model.ID]; ok {
+				tmp = append(tmp, model)
+				foundSet[model.ID] = struct{}{}
+			}
+		}
+		for k := range allowedSet {
+			if _, ok := foundSet[k]; !ok {
+				unknown = append(unknown, k)
+			}
+		}
+		filtered = tmp
+		filteredMsg = "NOTE: The model list is filtered by allowed_models in config."
+		if len(unknown) > 0 {
+			fmt.Printf("WARNING: The following allowed_models were not found and are ignored: %v\n", unknown)
+		}
+	}
+	fmt.Printf("Available models (%d shown):\n", len(filtered))
+	for _, model := range filtered {
+		fmt.Printf("  - %s (%s)\n", model.ID, model.OwnedBy)
+	}
+	if filteredMsg != "" {
+		fmt.Println(filteredMsg)
+	}
+	return nil
+}
 
-func handleRefresh() error {
-       cfg, err := LoadConfig()
-       if err != nil {
-               if errors.Is(err, ErrMissingTokens) {
-                       fmt.Println("Not authenticated. Run 'auth' to authenticate.")
-                       return nil
-               }
-               return fmt.Errorf("failed to load config: %v", err)
-       }
-
-	if cfg.CopilotToken == "" {
-		return fmt.Errorf("no token to refresh - run 'auth' command first")
+func handleRefresh(email string) error {
+	cfg, err := LoadConfig(true)
+	if err != nil {
+		if errors.Is(err, ErrMissingTokens) {
+			fmt.Println("Not authenticated. Run 'auth <email>' to authenticate.")
+			return nil
+		}
+		return fmt.Errorf("failed to load config: %v", err)
 	}
 
 	// Create HTTP client and auth service
@@ -365,7 +385,8 @@ func handleRefresh() error {
 	authService := NewAuthService(httpClient)
 
 	fmt.Println("Forcing token refresh...")
-	if err := authService.RefreshToken(cfg); err != nil {
+	// Use the provided email for token refresh
+	if err := authService.RefreshToken(email, cfg); err != nil {
 		return fmt.Errorf("token refresh failed: %v", err)
 	}
 

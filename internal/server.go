@@ -103,6 +103,16 @@ func CreateHTTPClient(cfg *Config) *http.Client {
 
 // NewServer creates a new server instance
 func NewServer(cfg *Config, httpClient *http.Client) *Server {
+	// Log configuration headers for debugging
+	Info("Creating new server",
+		"port", cfg.Port,
+		"user_agent", cfg.Headers.UserAgent,
+		"editor_version", cfg.Headers.EditorVersion,
+		"editor_plugin_version", cfg.Headers.EditorPluginVersion,
+		"copilot_integration_id", cfg.Headers.CopilotIntegrationID,
+		"openai_intent", cfg.Headers.OpenaiIntent,
+		"x_initiator", cfg.Headers.XInitiator)
+
 	workerPool := NewWorkerPool(runtime.NumCPU() * workerMultiplier)
 
 	// Create auth service
@@ -115,6 +125,9 @@ func NewServer(cfg *Config, httpClient *http.Client) *Server {
 	// Create proxy service
 	proxyService := NewProxyService(cfg, httpClient, authService, workerPool)
 
+	// Create auth API service
+	authAPIService := NewAuthAPIService(authService, cfg)
+
 	// Create health checker
 	healthChecker := NewHealthChecker(httpClient, "dev") // TODO: get version from build
 
@@ -122,7 +135,10 @@ func NewServer(cfg *Config, httpClient *http.Client) *Server {
 	mux.HandleFunc("/v1/models", modelsService.Handler())
 	mux.HandleFunc("/v1/chat/completions", proxyService.Handler())
 	mux.HandleFunc("/v1/completions", proxyService.Handler())
-	mux.HandleFunc("/health", healthChecker.Handler())
+	mux.HandleFunc("/v1/auth/github/stage1", authAPIService.Stage1Handler())
+	mux.HandleFunc("/v1/auth/github/stage2", authAPIService.Stage2Handler())
+	mux.HandleFunc("/v1/auth/github", authAPIService.Handler()) // Deprecated, for backward compatibility
+	mux.HandleFunc("/v1/health", healthChecker.Handler())
 
 	// Add pprof endpoints for profiling
 	mux.HandleFunc("/debug/pprof/", http.DefaultServeMux.ServeHTTP)
@@ -177,7 +193,10 @@ func (s *Server) Start() error {
 	fmt.Printf("  - Models: http://localhost:%d/v1/models\n", port)
 	fmt.Printf("  - Chat: http://localhost:%d/v1/chat/completions\n", port)
 	fmt.Printf("  - Completions: http://localhost:%d/v1/completions\n", port)
-	fmt.Printf("  - Health: http://localhost:%d/health\n", port)
+	fmt.Printf("  - Health: http://localhost:%d/v1/health\n", port)
+	fmt.Printf("  - Auth Stage 1: http://localhost:%d/v1/auth/github/stage1\n", port)
+	fmt.Printf("  - Auth Stage 2: http://localhost:%d/v1/auth/github/stage2\n", port)
+	fmt.Printf("  - Auth (Full): http://localhost:%d/v1/auth/github\n", port)
 
 	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server failed: %v", err)

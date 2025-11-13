@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/privapps/github-copilot-svcs/internal"
+	"github.com/xdlhzdh/github-copilot-svcs/internal"
 )
 
 // Test helpers
@@ -265,7 +265,7 @@ func TestNewServer(t *testing.T) {
 func TestServerStartStop(t *testing.T) {
 	t.Run("server starts and stops gracefully", func(t *testing.T) {
 		cfg := createServerTestConfig()
-		cfg.Port = 0 // Let system assign port
+		cfg.Port = 8082
 		httpClient := internal.CreateHTTPClient(cfg)
 		server := internal.NewServer(cfg, httpClient)
 
@@ -297,7 +297,7 @@ func TestServerStartStop(t *testing.T) {
 
 	t.Run("server stops gracefully", func(t *testing.T) {
 		cfg := createServerTestConfig()
-		cfg.Port = 0
+		cfg.Port = 8082
 		httpClient := internal.CreateHTTPClient(cfg)
 		server := internal.NewServer(cfg, httpClient)
 

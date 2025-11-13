@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/privapps/github-copilot-svcs/internal"
-	"github.com/privapps/github-copilot-svcs/pkg/transform"
+	"github.com/xdlhzdh/github-copilot-svcs/internal"
+	"github.com/xdlhzdh/github-copilot-svcs/pkg/transform"
 )
 
 // MockCoalescingCache implements CoalescingCacheInterface for testing
