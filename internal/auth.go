@@ -459,33 +459,56 @@ func (s *AuthService) updateTokenInDatabaseWithContext(ctx context.Context, emai
 }
 
 func (s *AuthService) getDeviceCode(cfg *Config) (*deviceCodeResponse, error) {
-	body := fmt.Sprintf(`{"client_id":%q,"scope":%q}`, copilotClientID, copilotScope)
-	req, err := http.NewRequest("POST", copilotDeviceCodeURL, strings.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", cfg.Headers.UserAgent)
+	const maxRetries = 1 // 最多重试 1 次（总共 2 次尝试）
 
-	Info("Sending device code request", "url", copilotDeviceCodeURL)
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		Error("Device code request failed", "error", err)
-		return nil, err
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			Warn("Error closing response body", "error", err)
+	for attempt := 1; attempt <= maxRetries+1; attempt++ {
+		body := fmt.Sprintf(`{"client_id":%q,"scope":%q}`, copilotClientID, copilotScope)
+		req, err := http.NewRequest("POST", copilotDeviceCodeURL, strings.NewReader(body))
+		if err != nil {
+			return nil, err
 		}
-	}()
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", cfg.Headers.UserAgent)
 
-	var dc deviceCodeResponse
-	if err := json.NewDecoder(resp.Body).Decode(&dc); err != nil {
-		return nil, err
+		Info("Sending device code request", "url", copilotDeviceCodeURL, "attempt", attempt)
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			// 检查是否是 TLS 握手超时错误
+			isTLSTimeout := strings.Contains(err.Error(), "TLS handshake timeout")
+
+			if isTLSTimeout && attempt <= maxRetries {
+				// TLS 超时且还有重试次数，等待后重试
+				waitTime := time.Duration(attempt*2) * time.Second
+				Warn("Device code request failed (TLS timeout), retrying",
+					"attempt", attempt,
+					"max_retries", maxRetries,
+					"wait_time", waitTime,
+					"error", err)
+				time.Sleep(waitTime)
+				continue
+			}
+
+			// 最后一次尝试失败或非 TLS 超时错误
+			Error("Device code request failed", "attempt", attempt, "error", err)
+			return nil, err
+		}
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				Warn("Error closing response body", "error", err)
+			}
+		}()
+
+		var dc deviceCodeResponse
+		if err := json.NewDecoder(resp.Body).Decode(&dc); err != nil {
+			return nil, err
+		}
+
+		Info("Device code request successful", "attempt", attempt)
+		return &dc, nil
 	}
 
-	return &dc, nil
+	return nil, NewAuthError("failed to get device code after retries", nil)
 }
 
 func (s *AuthService) pollForGitHubToken(cfg *Config, deviceCode string, interval int, expiresIn int) (string, error) {

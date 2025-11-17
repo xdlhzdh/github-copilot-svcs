@@ -188,6 +188,9 @@ func (s *Server) Start() error {
 		port = 8081
 	}
 
+	// 预热连接池：在服务启动后立即建立到 GitHub 的连接
+	go s.warmupConnections()
+
 	fmt.Printf("Starting GitHub Copilot proxy server on port %d...\n", port)
 	fmt.Printf("Endpoints:\n")
 	fmt.Printf("  - Models: http://localhost:%d/v1/models\n", port)
@@ -237,6 +240,50 @@ func (s *Server) setupGracefulShutdown() {
 			Error("Server shutdown error", "error", err)
 		}
 	}()
+}
+
+// warmupConnections 预热到 GitHub 的网络连接
+// 在代理环境中，首次 TLS 握手可能需要更长时间
+// 通过在后台提前建立连接，可以避免用户请求时的超时
+func (s *Server) warmupConnections() {
+	endpoints := []string{
+		"https://github.com/login/device/code",
+		"https://api.github.com",
+		"https://api.githubcopilot.com",
+	}
+
+	Info("Starting connection warmup", "endpoints", len(endpoints))
+
+	for _, endpoint := range endpoints {
+		go func(url string) {
+			req, err := http.NewRequest("HEAD", url, http.NoBody)
+			if err != nil {
+				Debug("Warmup: failed to create request", "url", url, "error", err)
+				return
+			}
+
+			req.Header.Set("User-Agent", s.config.Headers.UserAgent)
+
+			// 使用较短的超时，因为只是预热
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			req = req.WithContext(ctx)
+
+			resp, err := s.httpClient.Do(req)
+			if err != nil {
+				// 预热失败不影响服务启动，只记录日志
+				Debug("Warmup: connection failed", "url", url, "error", err)
+				return
+			}
+			defer func() {
+				if closeErr := resp.Body.Close(); closeErr != nil {
+					Debug("Warmup: failed to close response body", "error", closeErr)
+				}
+			}()
+
+			Info("Warmup: connection established", "url", url, "status", resp.StatusCode)
+		}(endpoint)
+	}
 }
 
 // healthHandler is now replaced by the comprehensive HealthChecker
