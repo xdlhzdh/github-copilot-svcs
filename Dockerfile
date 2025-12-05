@@ -1,4 +1,4 @@
-FROM golang:1.25-alpine AS builder
+FROM golang:alpine AS builder
 
 # Set proxy environment variables
 ARG HTTP_PROXY
