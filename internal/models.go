@@ -93,6 +93,8 @@ func GetDefault() []transform.Model {
 		// GitHub Copilot (OpenAI-compatible)
 		{ID: "gpt-4o", Object: "model", Created: time.Now().Unix(), OwnedBy: "openai"},
 		{ID: "gpt-4.1", Object: "model", Created: time.Now().Unix(), OwnedBy: "openai"},
+		{ID: "gpt-5", Object: "model", Created: time.Now().Unix(), OwnedBy: "openai"},
+		{ID: "gpt-5-mini", Object: "model", Created: time.Now().Unix(), OwnedBy: "openai"},
 		{ID: "o3", Object: "model", Created: time.Now().Unix(), OwnedBy: "openai"},
 		{ID: "o3-mini", Object: "model", Created: time.Now().Unix(), OwnedBy: "openai"},
 		{ID: "o4-mini", Object: "model", Created: time.Now().Unix(), OwnedBy: "openai"},
@@ -102,6 +104,8 @@ func GetDefault() []transform.Model {
 		{ID: "claude-3.7-sonnet-thought", Object: "model", Created: time.Now().Unix(), OwnedBy: "anthropic"},
 		{ID: "claude-opus-4", Object: "model", Created: time.Now().Unix(), OwnedBy: "anthropic"},
 		{ID: "claude-sonnet-4", Object: "model", Created: time.Now().Unix(), OwnedBy: "anthropic"},
+		{ID: "claude-sonnet-4.5", Object: "model", Created: time.Now().Unix(), OwnedBy: "anthropic"},
+		{ID: "claude-haiku-4.5", Object: "model", Created: time.Now().Unix(), OwnedBy: "anthropic"},
 		// Gemini (Google)
 		{ID: "gemini-2.5-pro", Object: "model", Created: time.Now().Unix(), OwnedBy: "google"},
 		{ID: "gemini-2.0-flash-001", Object: "model", Created: time.Now().Unix(), OwnedBy: "google"},
