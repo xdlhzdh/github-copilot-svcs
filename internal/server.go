@@ -135,6 +135,7 @@ func NewServer(cfg *Config, httpClient *http.Client) *Server {
 	mux.HandleFunc("/v1/models", modelsService.Handler())
 	mux.HandleFunc("/v1/chat/completions", proxyService.Handler())
 	mux.HandleFunc("/v1/completions", proxyService.Handler())
+	mux.HandleFunc("/v1/responses", proxyService.Handler())
 	mux.HandleFunc("/v1/auth/github/stage1", authAPIService.Stage1Handler())
 	mux.HandleFunc("/v1/auth/github/stage2", authAPIService.Stage2Handler())
 	mux.HandleFunc("/v1/auth/github", authAPIService.Handler()) // Deprecated, for backward compatibility
@@ -196,6 +197,7 @@ func (s *Server) Start() error {
 	fmt.Printf("  - Models: http://localhost:%d/v1/models\n", port)
 	fmt.Printf("  - Chat: http://localhost:%d/v1/chat/completions\n", port)
 	fmt.Printf("  - Completions: http://localhost:%d/v1/completions\n", port)
+	fmt.Printf("  - Responses: http://localhost:%d/v1/responses\n", port)
 	fmt.Printf("  - Health: http://localhost:%d/v1/health\n", port)
 	fmt.Printf("  - Auth Stage 1: http://localhost:%d/v1/auth/github/stage1\n", port)
 	fmt.Printf("  - Auth Stage 2: http://localhost:%d/v1/auth/github/stage2\n", port)

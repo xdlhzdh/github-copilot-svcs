@@ -2,13 +2,16 @@
 package internal
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	mathrand "math/rand"
 	"net/http"
 	"slices"
 	"strings"
@@ -330,19 +333,18 @@ func (s *ProxyService) processProxyRequest(ctx context.Context, w http.ResponseW
 	}
 	Info("Extracted email from URL parameter", "email", email, "raw_query", r.URL.RawQuery)
 
-	var input struct {
-		Model string `json:"model"`
-	}
-
-	if jsonErr := json.Unmarshal(body, &input); jsonErr != nil {
+	var payload map[string]any
+	if jsonErr := json.Unmarshal(body, &payload); jsonErr != nil {
 		return fmt.Errorf("bad request: invalid JSON: %w", jsonErr)
 	}
 
+	model, _ := payload["model"].(string)
+
 	// AllowedModels validation
 	if len(s.config.AllowedModels) > 0 {
-		allowed := slices.Contains(s.config.AllowedModels, input.Model)
+		allowed := slices.Contains(s.config.AllowedModels, model)
 		if !allowed {
-			return fmt.Errorf("bad request: model '%s' is not allowed by allowed_models in config", input.Model)
+			return fmt.Errorf("bad request: model '%s' is not allowed by allowed_models in config", model)
 		}
 	}
 
@@ -358,6 +360,27 @@ func (s *ProxyService) processProxyRequest(ctx context.Context, w http.ResponseW
 		"editor_version", cfg.Headers.EditorVersion,
 		"copilot_token_prefix", cfg.CopilotToken[:10]+"...")
 
+	isResponsesEndpoint := r.URL.Path == "/v1/responses"
+	openaiIntent := cfg.Headers.OpenaiIntent
+	xInitiator := cfg.Headers.XInitiator
+	visionRequested := false
+
+	if isResponsesEndpoint {
+		visionRequested = hasVisionInput(payload["input"])
+		if hasAgentInitiator(payload["input"]) {
+			xInitiator = "agent"
+		} else {
+			xInitiator = "user"
+		}
+		openaiIntent = "conversation-panel"
+		payload["service_tier"] = nil
+		updatedBody, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return fmt.Errorf("bad request: failed to encode responses payload: %w", marshalErr)
+		}
+		body = updatedBody
+	}
+
 	// Create new request to GitHub Copilot
 	var targetURL string
 	switch r.URL.Path {
@@ -365,6 +388,8 @@ func (s *ProxyService) processProxyRequest(ctx context.Context, w http.ResponseW
 		targetURL = copilotAPIBase + "/completions"
 	case "/v1/chat/completions":
 		targetURL = copilotAPIBase + "/chat/completions"
+	case "/v1/responses":
+		targetURL = copilotAPIBase + "/responses"
 	default:
 		return fmt.Errorf("unsupported proxy path: %s", r.URL.Path)
 	}
@@ -384,8 +409,11 @@ func (s *ProxyService) processProxyRequest(ctx context.Context, w http.ResponseW
 	req.Header.Set("Editor-Version", cfg.Headers.EditorVersion)
 	req.Header.Set("Editor-Plugin-Version", cfg.Headers.EditorPluginVersion)
 	req.Header.Set("Copilot-Integration-Id", cfg.Headers.CopilotIntegrationID)
-	req.Header.Set("Openai-Intent", cfg.Headers.OpenaiIntent)
-	req.Header.Set("X-Initiator", cfg.Headers.XInitiator)
+	req.Header.Set("Openai-Intent", openaiIntent)
+	req.Header.Set("X-Initiator", xInitiator)
+	if isResponsesEndpoint && visionRequested {
+		req.Header.Set("Copilot-Vision-Request", "true")
+	}
 
 	resp, err := s.makeRequestWithRetry(req, body)
 	if err != nil {
@@ -441,6 +469,9 @@ func (s *ProxyService) processProxyRequest(ctx context.Context, w http.ResponseW
 
 	// Handle streaming vs regular responses
 	if resp.Header.Get("Content-Type") == "text/event-stream" {
+		if isResponsesEndpoint {
+			return s.handleResponsesStreamingResponse(w, resp)
+		}
 		return s.handleStreamingResponse(w, resp)
 	}
 	return s.handleRegularResponse(w, resp)
@@ -480,6 +511,320 @@ func (s *ProxyService) handleStreamingResponse(w http.ResponseWriter, resp *http
 		}
 	}
 	return nil
+}
+
+type streamIDTracker struct {
+	outputItems map[int]string
+}
+
+func newStreamIDTracker() *streamIDTracker {
+	return &streamIDTracker{
+		outputItems: make(map[int]string),
+	}
+}
+
+func (s *ProxyService) handleResponsesStreamingResponse(w http.ResponseWriter, resp *http.Response) error {
+	Debug("Starting responses streaming response copy with ID sync")
+
+	flusher, canFlush := w.(http.Flusher)
+	reader := bufio.NewReader(resp.Body)
+	tracker := newStreamIDTracker()
+
+	var (
+		eventID    string
+		eventName  string
+		dataLines  []string
+		otherLines []string
+	)
+
+	resetEvent := func() {
+		eventID = ""
+		eventName = ""
+		dataLines = dataLines[:0]
+		otherLines = otherLines[:0]
+	}
+
+	flushEvent := func() error {
+		if eventID == "" && eventName == "" && len(dataLines) == 0 && len(otherLines) == 0 {
+			return nil
+		}
+		if eventID != "" {
+			if _, err := fmt.Fprintf(w, "id: %s\n", eventID); err != nil {
+				return err
+			}
+		}
+		if eventName != "" {
+			if _, err := fmt.Fprintf(w, "event: %s\n", eventName); err != nil {
+				return err
+			}
+		}
+		for _, line := range otherLines {
+			if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
+				return err
+			}
+		}
+
+		if len(dataLines) > 0 {
+			combined := strings.Join(dataLines, "\n")
+			processed := fixResponseStreamIDs(combined, eventName, tracker)
+			if processed == "" {
+				if _, err := fmt.Fprint(w, "data:\n"); err != nil {
+					return err
+				}
+			} else {
+				for line := range strings.SplitSeq(processed, "\n") {
+					if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
+						return err
+					}
+				}
+			}
+		}
+
+		if _, err := fmt.Fprint(w, "\n"); err != nil {
+			return err
+		}
+		if canFlush {
+			flusher.Flush()
+		}
+		resetEvent()
+		return nil
+	}
+
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil && readErr != io.EOF {
+			Error("Error reading streaming response", "error", readErr)
+			return readErr
+		}
+
+		line = strings.TrimRight(line, "\r\n")
+
+		if line == "" {
+			if err := flushEvent(); err != nil {
+				return err
+			}
+		} else if strings.HasPrefix(line, ":") {
+			if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
+				return err
+			}
+			if canFlush {
+				flusher.Flush()
+			}
+		} else {
+			field, value, found := strings.Cut(line, ":")
+			if !found {
+				otherLines = append(otherLines, line)
+			} else {
+				value = strings.TrimPrefix(value, " ")
+				switch field {
+				case "id":
+					eventID = value
+				case "event":
+					eventName = value
+				case "data":
+					dataLines = append(dataLines, value)
+				default:
+					otherLines = append(otherLines, line)
+				}
+			}
+		}
+
+		if readErr == io.EOF {
+			if line != "" {
+				if err := flushEvent(); err != nil {
+					return err
+				}
+			}
+			break
+		}
+	}
+
+	Debug("Responses streaming response completed successfully")
+	return nil
+}
+
+func fixResponseStreamIDs(data string, event string, tracker *streamIDTracker) string {
+	if data == "" {
+		return data
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+		return data
+	}
+	switch event {
+	case "response.output_item.added":
+		return handleOutputItemAdded(parsed, tracker, data)
+	case "response.output_item.done":
+		return handleOutputItemDone(parsed, tracker, data)
+	default:
+		return handleItemID(parsed, tracker, data)
+	}
+}
+
+func handleOutputItemAdded(parsed map[string]any, tracker *streamIDTracker, fallback string) string {
+	outputIndex, ok := getIntFromInterface(parsed["output_index"])
+	if !ok {
+		return marshalStreamEvent(parsed, fallback)
+	}
+
+	item, ok := parsed["item"].(map[string]any)
+	if !ok {
+		return marshalStreamEvent(parsed, fallback)
+	}
+
+	itemID, _ := item["id"].(string)
+	if itemID == "" {
+		itemID = fmt.Sprintf("oi_%d_%s", outputIndex, randomBase36(16))
+		item["id"] = itemID
+	}
+	tracker.outputItems[outputIndex] = itemID
+	return marshalStreamEvent(parsed, fallback)
+}
+
+func handleOutputItemDone(parsed map[string]any, tracker *streamIDTracker, fallback string) string {
+	outputIndex, ok := getIntFromInterface(parsed["output_index"])
+	if !ok {
+		return marshalStreamEvent(parsed, fallback)
+	}
+
+	item, ok := parsed["item"].(map[string]any)
+	if !ok {
+		return marshalStreamEvent(parsed, fallback)
+	}
+
+	if originalID, exists := tracker.outputItems[outputIndex]; exists {
+		item["id"] = originalID
+	}
+	return marshalStreamEvent(parsed, fallback)
+}
+
+func handleItemID(parsed map[string]any, tracker *streamIDTracker, fallback string) string {
+	outputIndex, ok := getIntFromInterface(parsed["output_index"])
+	if !ok {
+		return marshalStreamEvent(parsed, fallback)
+	}
+
+	if itemID, exists := tracker.outputItems[outputIndex]; exists {
+		parsed["item_id"] = itemID
+	}
+	return marshalStreamEvent(parsed, fallback)
+}
+
+func marshalStreamEvent(parsed map[string]any, fallback string) string {
+	encoded, err := json.Marshal(parsed)
+	if err != nil {
+		return fallback
+	}
+	return string(encoded)
+}
+
+func getIntFromInterface(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(n), true
+	default:
+		return 0, false
+	}
+}
+
+func randomBase36(length int) string {
+	const charset = "0123456789abcdefghijklmnopqrstuvwxyz"
+	if length <= 0 {
+		return ""
+	}
+	output := make([]byte, length)
+	if _, err := cryptorand.Read(output); err == nil {
+		for i := range output {
+			output[i] = charset[int(output[i])%len(charset)]
+		}
+		return string(output)
+	}
+
+	rng := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
+	for i := range output {
+		output[i] = charset[rng.Intn(len(charset))]
+	}
+	return string(output)
+}
+
+func hasAgentInitiator(input any) bool {
+	items := getPayloadItems(input)
+	if len(items) == 0 {
+		return false
+	}
+	lastItem := items[len(items)-1]
+	itemMap, ok := lastItem.(map[string]any)
+	if !ok {
+		return true
+	}
+	roleValue, exists := itemMap["role"]
+	if !exists || roleValue == nil {
+		return true
+	}
+	role, ok := roleValue.(string)
+	if !ok || role == "" {
+		return true
+	}
+	return strings.ToLower(role) == "assistant"
+}
+
+func hasVisionInput(input any) bool {
+	items := getPayloadItems(input)
+	for _, item := range items {
+		if containsVisionContent(item) {
+			return true
+		}
+	}
+	return false
+}
+
+func getPayloadItems(input any) []any {
+	items, ok := input.([]any)
+	if !ok {
+		return nil
+	}
+	return items
+}
+
+func containsVisionContent(value any) bool {
+	if value == nil {
+		return false
+	}
+	if array, ok := value.([]any); ok {
+		for _, entry := range array {
+			if containsVisionContent(entry) {
+				return true
+			}
+		}
+		return false
+	}
+	record, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	if typeValue, ok := record["type"].(string); ok && strings.ToLower(typeValue) == "input_image" {
+		return true
+	}
+	if content, ok := record["content"].([]any); ok {
+		for _, entry := range content {
+			if containsVisionContent(entry) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *ProxyService) handleRegularResponse(w http.ResponseWriter, resp *http.Response) error {
